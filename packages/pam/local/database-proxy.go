@@ -2,18 +2,22 @@ package pam
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Infisical/infisical-merge/packages/api"
+	"github.com/Infisical/infisical-merge/packages/config"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/util"
 	"github.com/go-resty/resty/v2"
+	"github.com/manifoldco/promptui"
 	"github.com/rs/zerolog/log"
 )
 
@@ -28,10 +32,23 @@ type ALPN string
 const (
 	ALPNInfisicalPAMProxy        ALPN = "infisical-pam-proxy"
 	ALPNInfisicalPAMCancellation ALPN = "infisical-pam-session-cancellation"
+	ALPNInfisicalPAMCapabilities ALPN = "infisical-pam-capabilities"
 )
 
-func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr string, port int) {
-	log.Info().Msgf("Starting database proxy for account ID: %s", accountID)
+func askForApprovalRequestTrigger() (bool, error) {
+	prompt := promptui.Prompt{
+		Label:     "This action requires approval. You may create an approval request now. Continue?",
+		IsConfirm: true,
+	}
+	result, err := prompt.Run()
+	if err != nil {
+		return false, err
+	}
+	return strings.ToLower(result) == "y", nil
+}
+
+func StartDatabaseLocalProxy(accessToken string, accountPath string, projectID string, durationStr string, port int) {
+	log.Info().Msgf("Starting database proxy for account: %s", accountPath)
 	log.Info().Msgf("Session duration: %s", durationStr)
 
 	httpClient := resty.New()
@@ -39,12 +56,55 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 	httpClient.SetHeader("User-Agent", "infisical-cli")
 
 	pamRequest := api.PAMAccessRequest{
-		Duration:  durationStr,
-		AccountId: accountID,
+		Duration:    durationStr,
+		AccountPath: accountPath,
+		ProjectId:   projectID,
 	}
 
 	pamResponse, err := CallPAMAccessWithMFA(httpClient, pamRequest)
 	if err != nil {
+		var apiErr *api.APIError
+		if errors.As(err, &apiErr) && apiErr.ErrorMessage == "A policy is in place for this resource" {
+			if v, ok := apiErr.Details.(map[string]any); ok {
+				log.Info().Msgf("Account is protected by approval policy: %s", v["policyName"])
+
+				shouldSendRequest, err := askForApprovalRequestTrigger()
+				if err != nil {
+					if errors.Is(err, promptui.ErrAbort) {
+						log.Info().Msgf("Approval request was not created.")
+					} else {
+						util.HandleError(err, "Failed to send PAM account request")
+					}
+					return
+				}
+
+				if !shouldSendRequest {
+					log.Info().Msgf("Approval request was not created.")
+					return
+				}
+
+				approvalReq, err := api.CallPAMAccessApprovalRequest(httpClient, api.PAMAccessApprovalRequest{
+					ProjectId: projectID,
+					RequestData: api.PAMAccessApprovalRequestPayloadRequestData{
+						AccountPath:    accountPath,
+						AccessDuration: durationStr,
+					},
+				})
+				if err != nil {
+					util.HandleError(err, "Failed to send PAM account request")
+					return
+				}
+
+				url := fmt.Sprintf("%s/organizations/%s/projects/pam/%s/approval-requests/%s", strings.TrimSuffix(config.INFISICAL_URL, "/api"), approvalReq.Request.OrgId, approvalReq.Request.ProjectId, approvalReq.Request.ID)
+				if err := util.OpenBrowser(url); err != nil {
+					log.Error().Msgf("Failed to do browser redirect: %v", err)
+				}
+				log.Info().Msgf("Approval request created.")
+				log.Info().Msgf("View details at: %s", url)
+				return
+			}
+		}
+
 		util.HandleError(err, "Failed to access PAM account")
 		return
 	}
@@ -71,10 +131,16 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 			gatewayServerCertChain: pamResponse.GatewayServerCertificateChain,
 			sessionExpiry:          time.Now().Add(duration),
 			sessionId:              pamResponse.SessionId,
+			resourceType:           pamResponse.ResourceType,
 			ctx:                    ctx,
 			cancel:                 cancel,
 			shutdownCh:             make(chan struct{}),
 		},
+	}
+
+	if err := proxy.ValidateResourceTypeSupported(); err != nil {
+		util.HandleError(err, "Gateway version outdated")
+		return
 	}
 
 	err = proxy.Start(port)
@@ -84,9 +150,9 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 	}
 
 	if port == 0 {
-		fmt.Printf("Database proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountID, duration.String(), proxy.port)
+		fmt.Printf("Database proxy started for account %s with duration %s on port %d (auto-assigned)\n", accountPath, duration.String(), proxy.port)
 	} else {
-		fmt.Printf("Database proxy started for account %s with duration %s on port %d\n", accountID, duration.String(), proxy.port)
+		fmt.Printf("Database proxy started for account %s with duration %s on port %d\n", accountPath, duration.String(), proxy.port)
 	}
 
 	username, ok := pamResponse.Metadata["username"]
@@ -104,7 +170,7 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 		util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountName'"), "Failed to start proxy server")
 		return
 	}
-	accountPath, ok := pamResponse.Metadata["accountPath"]
+	accountPathMetadata, ok := pamResponse.Metadata["accountPath"]
 	if !ok {
 		util.HandleError(fmt.Errorf("PAM response metadata is missing 'accountPath'"), "Failed to start proxy server")
 		return
@@ -115,7 +181,7 @@ func StartDatabaseLocalProxy(accessToken string, accountID string, durationStr s
 	fmt.Printf("**********************************************************************\n")
 	fmt.Printf("                  Database Proxy Session Started!                  \n")
 	fmt.Printf("----------------------------------------------------------------------\n")
-	fmt.Printf("Accessing account %s at folder path %s\n", accountName, accountPath)
+	fmt.Printf("Accessing account %s at folder path %s\n", accountName, accountPathMetadata)
 	fmt.Printf("\n")
 	fmt.Printf("You can now connect to your database using this connection string:\n")
 
