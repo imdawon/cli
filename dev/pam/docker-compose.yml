@@ -148,12 +148,15 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: "3001"
+      # Test-only credential: a web app account reaches the app only if its Header sign-in sends this
+      REQUIRED_HEADER_NAME: X-Acme-Token
+      REQUIRED_HEADER_VALUE: acme-dev-token
     ports:
       - "127.0.0.1:55490:3001"
     volumes:
       - ./resources/web-app:/app:ro
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/api/status"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/healthz"]
       interval: 5s
       timeout: 5s
       retries: 5

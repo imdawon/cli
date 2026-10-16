@@ -56,7 +56,7 @@ ENABLE_WEB_APP=false
 
 ## Web app
 
-`ENABLE_WEB_APP=true` runs a small internal web app on `http://127.0.0.1:55490` to point a web app account at. It has page navigation, an order form that posts and redirects, CSS, JS, image and API loading checks, and a panel showing the `Authorization` header it received. It isn't registered by `setup.sh` yet, so create the account in the UI.
+`ENABLE_WEB_APP=true` runs a small internal web app on `http://127.0.0.1:55490` to point a web app account at. It has page navigation, an order form that posts and redirects, CSS, JS, image and API loading checks, and a panel showing the `Authorization` header it received. Every request must carry `X-Acme-Token: acme-dev-token` (a test-only value), or the app answers 401, so the account needs **Sign-in Method: Header** with that name and value. It isn't registered by `setup.sh` yet, so create the account in the UI.
 
 ## Make targets
 

@@ -12,6 +12,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || "127.0.0.1";
 
+// When both are set, every request needs this header, the way a real internal app checks a token. A web app
+// account then reaches it only if the gateway injects the credential.
+const REQUIRED_HEADER_NAME = (process.env.REQUIRED_HEADER_NAME || "").toLowerCase();
+const REQUIRED_HEADER_VALUE = process.env.REQUIRED_HEADER_VALUE || "";
+
 const submissions = [];
 let requestCount = 0;
 
@@ -132,6 +137,7 @@ const renderPage = (req, url) => {
       <h2>What this app received</h2>
       <dl>
         <dt>Authorization</dt><dd id="auth">${esc(describeAuth(req))}</dd>
+        <dt>Required header</dt><dd>${REQUIRED_HEADER_NAME ? `${esc(REQUIRED_HEADER_NAME)}: valid` : "not enforced"}</dd>
         <dt>Cookie</dt><dd>${esc(req.headers.cookie ? "present" : "none")}</dd>
         <dt>User agent</dt><dd class="ua">${esc(req.headers["user-agent"] || "")}</dd>
         <dt>Requests served</dt><dd>${requestCount}</dd>
@@ -148,6 +154,22 @@ const server = http.createServer(async (req, res) => {
   requestCount += 1;
   const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
   console.log(`${new Date().toISOString()} ${req.method} ${url.pathname}${url.search}`);
+
+  if (url.pathname === "/healthz") {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("ok");
+    return;
+  }
+
+  if (REQUIRED_HEADER_NAME && req.headers[REQUIRED_HEADER_NAME] !== REQUIRED_HEADER_VALUE) {
+    res.writeHead(401, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(
+      `<!doctype html><html><body style="font:16px sans-serif;padding:40px;background:#1e1e1e;color:#eee">` +
+        `<h1>401 Unauthorized</h1><p>Acme Internal Admin requires the <code>${esc(REQUIRED_HEADER_NAME)}</code> header.</p>` +
+        `</body></html>`
+    );
+    return;
+  }
 
   try {
     if (req.method === "GET" && url.pathname === "/") {
