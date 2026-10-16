@@ -174,6 +174,7 @@ func credentialValues(c *session.PAMCredentials) []string {
 		c.Token,
 		c.ServiceAccountToken,
 		c.ConnectionString,
+		c.HeaderValue,
 	}
 	for _, token := range c.Tokens {
 		values = append(values, token)
@@ -644,8 +645,15 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		return proxy.HandleConnection(ctx, handlerConn)
 	case session.ResourceTypeWebApp:
 		proxy := webapp.NewWebAppProxy(webapp.WebAppProxyConfig{
-			TargetURL:     credentials.Url,
-			SessionID:     pamConfig.SessionId,
+			TargetURL: credentials.Url,
+			SessionID: pamConfig.SessionId,
+			Auth: webapp.Auth{
+				Method:      credentials.AuthMethod,
+				Username:    credentials.Username,
+				Password:    credentials.Password,
+				HeaderName:  credentials.HeaderName,
+				HeaderValue: credentials.HeaderValue,
+			},
 			SessionLogger: sessionLogger,
 			Mask:          masker.MaskString,
 		})

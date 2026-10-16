@@ -28,6 +28,7 @@ type WebAppProxyConfig struct {
 	TargetURL     string
 	SessionID     string
 	SessionLogger session.SessionLogger
+	Auth          Auth
 	// Mask applies the template's session log masking to recorded text (URLs, click labels)
 	Mask func(string) string
 }
@@ -236,14 +237,19 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, clientConn net.Conn)
 				var params struct {
 					RequestID string `json:"requestId"`
 					Request   struct {
-						URL string `json:"url"`
+						URL     string            `json:"url"`
+						Headers map[string]string `json:"headers"`
 					} `json:"request"`
 				}
 				if err := json.Unmarshal(event.Params, &params); err != nil {
 					continue
 				}
 				if sameOrigin(target, params.Request.URL) {
-					_ = b.cdp.notify(pageSession, "Fetch.continueRequest", map[string]any{"requestId": params.RequestID})
+					continueParams := map[string]any{"requestId": params.RequestID}
+					if headers, ok := p.config.Auth.withInjectedHeader(params.Request.Headers); ok {
+						continueParams["headers"] = headers
+					}
+					_ = b.cdp.notify(pageSession, "Fetch.continueRequest", continueParams)
 					continue
 				}
 				_ = b.cdp.notify(pageSession, "Fetch.failRequest", map[string]any{"requestId": params.RequestID, "errorReason": "BlockedByClient"})

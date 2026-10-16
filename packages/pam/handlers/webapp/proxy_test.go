@@ -146,14 +146,24 @@ func startViewerSession(t *testing.T, targetURL string) *viewerSession {
 	return startViewerSessionWithLogger(t, targetURL, nil, nil)
 }
 
+func startProxyWithAuth(t *testing.T, targetURL string, auth Auth, logger session.SessionLogger) *viewerSession {
+	t.Helper()
+	return startViewerSessionWith(t, WebAppProxyConfig{TargetURL: targetURL, SessionID: "test-session", SessionLogger: logger, Auth: auth})
+}
+
 func startViewerSessionWithLogger(t *testing.T, targetURL string, logger session.SessionLogger, mask func(string) string) *viewerSession {
+	t.Helper()
+	return startViewerSessionWith(t, WebAppProxyConfig{TargetURL: targetURL, SessionID: "test-session", SessionLogger: logger, Mask: mask})
+}
+
+func startViewerSessionWith(t *testing.T, config WebAppProxyConfig) *viewerSession {
 	t.Helper()
 	viewer, gateway := net.Pipe()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
 
 	s := &viewerSession{t: t, conn: viewer, events: make(chan Event, 64), done: make(chan error, 1)}
-	proxy := NewWebAppProxy(WebAppProxyConfig{TargetURL: targetURL, SessionID: "test-session", SessionLogger: logger, Mask: mask})
+	proxy := NewWebAppProxy(config)
 	go func() { s.done <- proxy.HandleConnection(ctx, gateway) }()
 	go func() {
 		for {

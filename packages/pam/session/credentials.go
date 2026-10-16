@@ -51,6 +51,8 @@ type PAMCredentials struct {
 	Schema                string
 	Role                  string
 	PrivateKeyPassphrase  string
+	HeaderName            string
+	HeaderValue           string
 	PolicyRules           *api.PAMPolicyRules
 }
 
@@ -216,6 +218,8 @@ func (cm *CredentialsManager) GetPAMSessionCredentials(sessionId string, expiryT
 		Schema:                response.Credentials.Schema,
 		Role:                  response.Credentials.Role,
 		PrivateKeyPassphrase:  response.Credentials.PrivateKeyPassphrase,
+		HeaderName:            response.Credentials.HeaderName,
+		HeaderValue:           response.Credentials.HeaderValue,
 		PolicyRules:           response.PolicyRules,
 	}
 
