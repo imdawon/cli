@@ -27,6 +27,7 @@ type recordedAction struct {
 	Button string  `json:"button,omitempty"`
 	Target string  `json:"target,omitempty"`
 	Key    string  `json:"key,omitempty"`
+	Value  string  `json:"value,omitempty"`
 	URL    string  `json:"url,omitempty"`
 	Method string  `json:"method,omitempty"`
 	Status int     `json:"status,omitempty"`

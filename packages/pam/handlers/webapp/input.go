@@ -38,6 +38,9 @@ type inputMessage struct {
 
 	// nav
 	Action string `json:"action"`
+
+	// select: the option picked in the viewer's menu, or -1 to dismiss it
+	Index int `json:"index"`
 }
 
 const (
@@ -106,6 +109,12 @@ type inputDispatcher struct {
 	width       int
 	height      int
 	recorder    *recorder
+	notify      func(Event) error
+
+	// The <select> whose menu the viewer is showing, and whether the release of the click that opened it
+	// is still to come (it isn't sent to Chrome, or Chrome would open its own, invisible menu)
+	selectObjectID   string
+	swallowMouseUpOn string
 }
 
 // Labels what sits under a click for the recording. It never reads a field's value, only a button's caption,
@@ -166,9 +175,24 @@ func (d *inputDispatcher) dispatch(ctx context.Context, payload []byte) error {
 			return errors.New("invalid mouse input")
 		}
 		x, y := clamp(msg.X, 0, float64(d.width-1)), clamp(msg.Y, 0, float64(d.height-1))
+		if msg.Kind == "up" && d.swallowMouseUpOn == msg.Button {
+			d.swallowMouseUpOn = ""
+			return nil
+		}
 		recorded := recordedAction{Kind: "mouse", Action: msg.Kind, X: x, Y: y, Button: msg.Button}
 		if msg.Kind == "down" && d.recorder != nil {
 			_ = d.evaluate(ctx, fmt.Sprintf(describeElementScript, x, y), &recorded.Target)
+		}
+		if msg.Kind == "down" && msg.Button == "left" && d.notify != nil {
+			opened, err := d.openSelect(ctx, x, y)
+			if err != nil {
+				return err
+			}
+			if opened {
+				d.swallowMouseUpOn = msg.Button
+				d.record(recorded)
+				return nil
+			}
 		}
 		if err := d.cdp.call(ctx, d.pageSession, "Input.dispatchMouseEvent", map[string]any{
 			"type":       eventType,
@@ -259,6 +283,12 @@ func (d *inputDispatcher) dispatch(ctx context.Context, payload []byte) error {
 		}
 		d.record(recordedAction{Kind: "resize", Width: width, Height: height})
 		return nil
+
+	case "select":
+		if msg.Index < -1 || msg.Index >= maxSelectOptions {
+			return errors.New("invalid select input")
+		}
+		return d.chooseOption(ctx, msg.Index)
 
 	case "nav":
 		if msg.Action == "reload" || msg.Action == "back" || msg.Action == "forward" {

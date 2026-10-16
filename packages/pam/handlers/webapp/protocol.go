@@ -41,6 +41,7 @@ const (
 	EventKindNavigated EventKind = "navigated"
 	EventKindEnded     EventKind = "ended"
 	EventKindBlocked   EventKind = "blocked"
+	EventKindSelect    EventKind = "select"
 )
 
 type Event struct {
@@ -49,6 +50,11 @@ type Event struct {
 	Width  int       `json:"w,omitempty"`
 	Height int       `json:"h,omitempty"`
 	Reason string    `json:"reason,omitempty"`
+
+	// select: the menu the viewer draws in place of Chrome's, positioned in page CSS pixels
+	Options  []SelectOption `json:"options,omitempty"`
+	Selected *int           `json:"selected,omitempty"`
+	Rect     *SelectRect    `json:"rect,omitempty"`
 }
 
 type Message struct {

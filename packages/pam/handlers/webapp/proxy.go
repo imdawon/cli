@@ -128,6 +128,7 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, clientConn net.Conn)
 	rec := newRecorder(p.config.SessionLogger)
 	dispatcher := &inputDispatcher{
 		cdp: b.cdp, pageSession: pageSession, width: defaultViewportWidth, height: defaultViewportHeight, recorder: rec,
+		notify: sendEvent,
 	}
 	viewerGone := make(chan error, 1)
 	go func() {
