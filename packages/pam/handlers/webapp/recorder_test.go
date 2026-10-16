@@ -48,7 +48,7 @@ func (f *fakeSessionLogger) snapshot() (frames int, actions []recordedAction, ra
 
 func TestRecorderThrottlesFramesButKeepsTheLast(t *testing.T) {
 	logger := &fakeSessionLogger{}
-	rec := newRecorder(logger, nil)
+	rec := newRecorder(logger)
 
 	for i := 0; i < 10; i++ {
 		rec.frame([]byte{0xFF, 0xD8, byte(i)})
@@ -98,9 +98,7 @@ func TestRecordingCapturesActionsWithoutSecrets(t *testing.T) {
 	defer app.Close()
 
 	logger := &fakeSessionLogger{}
-	s := startViewerSessionWithLogger(t, app.URL, logger, func(v string) string {
-		return strings.ReplaceAll(v, "secret-token", maskedValue)
-	})
+	s := startViewerSessionWithLogger(t, app.URL, logger)
 	navigatedTo := func(path string) func(Event) bool {
 		return func(e Event) bool { return e.Kind == EventKindNavigated && e.URL == app.URL+path }
 	}

@@ -36,10 +36,10 @@ type recordedAction struct {
 }
 
 // recorder writes what the viewer saw and did into the session recording. It runs at the gateway, so the
-// viewer has no way to alter what is captured. Request bodies and headers are never recorded.
+// viewer has no way to alter what is captured. URLs and click labels are kept as they are so a reviewer can
+// follow the session; what's typed into a password field and request bodies and headers are never recorded.
 type recorder struct {
 	logger session.SessionLogger
-	mask   func(string) string
 
 	mu             sync.Mutex
 	lastFrameAt    time.Time
@@ -48,11 +48,8 @@ type recorder struct {
 	lastMoveAt     time.Time
 }
 
-func newRecorder(logger session.SessionLogger, mask func(string) string) *recorder {
-	if mask == nil {
-		mask = func(s string) string { return s }
-	}
-	return &recorder{logger: logger, mask: mask}
+func newRecorder(logger session.SessionLogger) *recorder {
+	return &recorder{logger: logger}
 }
 
 func (r *recorder) write(eventType session.SessionEventType, data []byte) {
@@ -98,8 +95,6 @@ func (r *recorder) flush() {
 }
 
 func (r *recorder) action(a recordedAction) {
-	a.URL = r.mask(a.URL)
-	a.Target = r.mask(a.Target)
 	data, err := json.Marshal(a)
 	if err != nil {
 		return

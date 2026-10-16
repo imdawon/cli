@@ -143,7 +143,7 @@ type viewerSession struct {
 
 func startViewerSession(t *testing.T, targetURL string) *viewerSession {
 	t.Helper()
-	return startViewerSessionWithLogger(t, targetURL, nil, nil)
+	return startViewerSessionWithLogger(t, targetURL, nil)
 }
 
 func startProxyWithAuth(t *testing.T, targetURL string, auth Auth, logger session.SessionLogger) *viewerSession {
@@ -151,9 +151,9 @@ func startProxyWithAuth(t *testing.T, targetURL string, auth Auth, logger sessio
 	return startViewerSessionWith(t, WebAppProxyConfig{TargetURL: targetURL, SessionID: "test-session", SessionLogger: logger, Auth: auth})
 }
 
-func startViewerSessionWithLogger(t *testing.T, targetURL string, logger session.SessionLogger, mask func(string) string) *viewerSession {
+func startViewerSessionWithLogger(t *testing.T, targetURL string, logger session.SessionLogger) *viewerSession {
 	t.Helper()
-	return startViewerSessionWith(t, WebAppProxyConfig{TargetURL: targetURL, SessionID: "test-session", SessionLogger: logger, Mask: mask})
+	return startViewerSessionWith(t, WebAppProxyConfig{TargetURL: targetURL, SessionID: "test-session", SessionLogger: logger})
 }
 
 func startViewerSessionWith(t *testing.T, config WebAppProxyConfig) *viewerSession {

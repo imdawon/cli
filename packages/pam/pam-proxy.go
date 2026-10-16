@@ -655,7 +655,6 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 				HeaderValue: credentials.HeaderValue,
 			},
 			SessionLogger: sessionLogger,
-			Mask:          masker.MaskString,
 		})
 		log.Info().
 			Str("sessionId", pamConfig.SessionId).

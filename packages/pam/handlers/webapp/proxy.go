@@ -29,8 +29,6 @@ type WebAppProxyConfig struct {
 	SessionID     string
 	SessionLogger session.SessionLogger
 	Auth          Auth
-	// Mask applies the template's session log masking to recorded text (URLs, click labels)
-	Mask func(string) string
 }
 
 const recorderFlushInterval = 250 * time.Millisecond
@@ -127,7 +125,7 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, clientConn net.Conn)
 
 	// Input is dispatched in order from this one goroutine. A malformed message is dropped, not fatal, so a
 	// buggy client can't end a session it's still using.
-	rec := newRecorder(p.config.SessionLogger, p.config.Mask)
+	rec := newRecorder(p.config.SessionLogger)
 	dispatcher := &inputDispatcher{
 		cdp: b.cdp, pageSession: pageSession, width: defaultViewportWidth, height: defaultViewportHeight, recorder: rec,
 	}
