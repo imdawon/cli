@@ -9,14 +9,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const (
-	// The screencast sends a frame on every visual change; an animated page would otherwise record several
-	// per second. The newest frame inside a window is kept and written when the window closes.
-	recordFrameInterval = 500 * time.Millisecond
-	recordMoveInterval  = 100 * time.Millisecond
+// The screencast sends a frame on every visual change; an animated page would otherwise record several
+// per second. The newest frame inside a window is kept and written when the window closes.
+const recordFrameInterval = 500 * time.Millisecond
 
-	maskedValue = "[MASKED]"
-)
+const recordMoveInterval = 100 * time.Millisecond
 
 // Action envelopes recorded alongside frames, ordered by the session logger's elapsed time.
 type recordedAction struct {

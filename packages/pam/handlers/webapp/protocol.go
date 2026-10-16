@@ -3,7 +3,6 @@ package webapp
 import (
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 )
@@ -20,7 +19,7 @@ const (
 	MessageTypeEvent MessageType = 0x02 // payload: Event JSON
 
 	// Viewer → gateway
-	MessageTypeInput MessageType = 0x10 // payload: input JSON (handled from M2)
+	MessageTypeInput MessageType = 0x10 // payload: input JSON
 )
 
 // Bounds a single message so a misbehaving peer can't make the gateway allocate without limit. A 1280x800
@@ -85,21 +84,6 @@ func encodeFrame(meta FrameMeta, jpeg []byte) ([]byte, error) {
 	copy(payload[4:], metaJSON)
 	copy(payload[4+len(metaJSON):], jpeg)
 	return payload, nil
-}
-
-func decodeFrame(payload []byte) (FrameMeta, []byte, error) {
-	var meta FrameMeta
-	if len(payload) < 4 {
-		return meta, nil, errors.New("frame payload too short")
-	}
-	metaLen := binary.BigEndian.Uint32(payload[:4])
-	if uint64(metaLen) > uint64(len(payload)-4) {
-		return meta, nil, errors.New("frame metadata length exceeds payload")
-	}
-	if err := json.Unmarshal(payload[4:4+metaLen], &meta); err != nil {
-		return meta, nil, fmt.Errorf("invalid frame metadata: %w", err)
-	}
-	return meta, payload[4+metaLen:], nil
 }
 
 func readMessage(r io.Reader) (Message, error) {

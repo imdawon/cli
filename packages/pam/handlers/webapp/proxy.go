@@ -22,6 +22,9 @@ const (
 	defaultViewportWidth  = 1280
 	defaultViewportHeight = 800
 	screencastJPEGQuality = 70
+	recorderFlushInterval = 250 * time.Millisecond
+	// Bounds the requests awaiting a response, so a page that never finishes requests can't grow it forever
+	maxTrackedRequests = 1000
 )
 
 type WebAppProxyConfig struct {
@@ -30,11 +33,6 @@ type WebAppProxyConfig struct {
 	SessionLogger session.SessionLogger
 	Auth          Auth
 }
-
-const recorderFlushInterval = 250 * time.Millisecond
-
-// Bounds the requests awaiting a response, so a page that never finishes requests can't grow it forever
-const maxTrackedRequests = 1000
 
 // WebAppProxy runs one isolated browser for a session. The gateway is its only CDP client: the viewer
 // receives rendered frames and sends typed input messages that the gateway translates into CDP.
@@ -114,7 +112,7 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, clientConn net.Conn)
 		return send(MessageTypeEvent, data)
 	}
 
-	pageSession, err := p.openPage(ctx, b.cdp, target.String())
+	pageSession, err := openPage(ctx, b.cdp, target.String())
 	if err != nil {
 		return err
 	}
@@ -254,11 +252,14 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, clientConn net.Conn)
 				_ = b.cdp.notify(pageSession, "Fetch.failRequest", map[string]any{"requestId": params.RequestID, "errorReason": "BlockedByClient"})
 				logger.Info().Str("url", params.Request.URL).Msg("Blocked web app request to another origin")
 				rec.action(recordedAction{Kind: "blocked", URL: params.Request.URL})
-				if err := sendEvent(Event{Kind: EventKindBlocked, URL: params.Request.URL}); err != nil && isViewerClosed(err) {
-					return nil
+				if err := sendEvent(Event{Kind: EventKindBlocked, URL: params.Request.URL}); err != nil {
+					if isViewerClosed(err) {
+						return nil
+					}
+					return err
 				}
 			case "Page.screencastFrame":
-				if err := p.forwardFrame(b.cdp, pageSession, event.Params, &seq, send, rec); err != nil {
+				if err := forwardFrame(b.cdp, pageSession, event.Params, &seq, send, rec); err != nil {
 					if isViewerClosed(err) {
 						logger.Info().Msg("Web app viewer disconnected")
 						return nil
@@ -288,7 +289,7 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, clientConn net.Conn)
 
 // openPage creates the page target, attaches to it, and starts the screencast. It returns the CDP session
 // id that page events and commands are scoped to.
-func (p *WebAppProxy) openPage(ctx context.Context, cdp *cdpClient, targetURL string) (string, error) {
+func openPage(ctx context.Context, cdp *cdpClient, targetURL string) (string, error) {
 	var created struct {
 		TargetID string `json:"targetId"`
 	}
@@ -302,7 +303,7 @@ func (p *WebAppProxy) openPage(ctx context.Context, cdp *cdpClient, targetURL st
 	if err := cdp.call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": created.TargetID, "flatten": true}, &attached); err != nil {
 		return "", err
 	}
-	session := attached.SessionID
+	pageSession := attached.SessionID
 
 	steps := []struct {
 		method string
@@ -321,20 +322,20 @@ func (p *WebAppProxy) openPage(ctx context.Context, cdp *cdpClient, targetURL st
 		{"Fetch.enable", map[string]any{"patterns": []map[string]any{{"urlPattern": "*"}}}},
 	}
 	for _, step := range steps {
-		if err := cdp.call(ctx, session, step.method, step.params, nil); err != nil {
+		if err := cdp.call(ctx, pageSession, step.method, step.params, nil); err != nil {
 			return "", err
 		}
 	}
 	// Navigate last: the first navigation away from about:blank swaps the page into a new renderer, and
 	// starting the screencast during that swap fails with "Not attached to an active page". It isn't awaited:
 	// its request pauses in Fetch until the event loop, which starts after this returns, lets it through.
-	if err := cdp.notify(session, "Page.navigate", map[string]any{"url": targetURL}); err != nil {
+	if err := cdp.notify(pageSession, "Page.navigate", map[string]any{"url": targetURL}); err != nil {
 		return "", err
 	}
-	return session, nil
+	return pageSession, nil
 }
 
-func (p *WebAppProxy) forwardFrame(cdp *cdpClient, pageSession string, raw json.RawMessage, seq *uint64, send func(MessageType, []byte) error, rec *recorder) error {
+func forwardFrame(cdp *cdpClient, pageSession string, raw json.RawMessage, seq *uint64, send func(MessageType, []byte) error, rec *recorder) error {
 	var frame struct {
 		Data      string `json:"data"`
 		SessionID int    `json:"sessionId"`

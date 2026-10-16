@@ -8,8 +8,14 @@ import (
 
 // Auth is how the gateway signs the browser in to the web app. The credential is added to requests at the
 // gateway, so it never reaches the viewer, the page's scripts, or the recording.
+const (
+	AuthMethodNone   = "none"
+	AuthMethodBasic  = "basic"
+	AuthMethodHeader = "header"
+)
+
 type Auth struct {
-	Method      string // "none", "basic" or "header"
+	Method      string
 	Username    string
 	Password    string
 	HeaderName  string
@@ -19,10 +25,10 @@ type Auth struct {
 // header returns the header to inject, or ok=false when the account signs in with nothing.
 func (a Auth) header() (name, value string, ok bool) {
 	switch a.Method {
-	case "basic":
+	case AuthMethodBasic:
 		credential := base64.StdEncoding.EncodeToString([]byte(a.Username + ":" + a.Password))
 		return "Authorization", "Basic " + credential, true
-	case "header":
+	case AuthMethodHeader:
 		if a.HeaderName == "" {
 			return "", "", false
 		}

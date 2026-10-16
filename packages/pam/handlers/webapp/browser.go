@@ -16,6 +16,8 @@ const BrowserPathEnv = "INFISICAL_PAM_BROWSER_PATH"
 
 const defaultBrowserPath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
+var browserCommands = []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable"}
+
 // FindBrowser returns the browser binary the gateway will launch, or an error if none is installed.
 func FindBrowser() (string, error) {
 	if path := os.Getenv(BrowserPathEnv); path != "" {
@@ -24,10 +26,15 @@ func FindBrowser() (string, error) {
 		}
 		return path, nil
 	}
-	if _, err := os.Stat(defaultBrowserPath); err != nil {
-		return "", fmt.Errorf("no Chromium-based browser found at %q; install Google Chrome or set %s", defaultBrowserPath, BrowserPathEnv)
+	if _, err := os.Stat(defaultBrowserPath); err == nil {
+		return defaultBrowserPath, nil
 	}
-	return defaultBrowserPath, nil
+	for _, name := range browserCommands {
+		if path, err := exec.LookPath(name); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("no Chromium-based browser found; install Google Chrome or Chromium, or set %s", BrowserPathEnv)
 }
 
 // IsSupported reports whether this gateway can serve web app sessions, so it only advertises the

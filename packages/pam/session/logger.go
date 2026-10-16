@@ -47,8 +47,7 @@ const (
 	SessionChannelExec  SessionChannelType = "exec"     // Single command execution
 	SessionChannelSFTP  SessionChannelType = "sftp"     // SFTP file transfer
 	SessionChannelRDP   SessionChannelType = "rdp"      // RDP frame/input tap; Data carries an RDP-specific JSON envelope
-	// Web app frames and actions. Data is JPEG or JSON and isn't masked: URLs and labels stay readable, and the
-	// handler records password-field keys as [MASKED] itself
+	// Web app frame (JPEG) or action (JSON); the handler masks password keys itself
 	SessionChannelWebApp SessionChannelType = "web-app"
 )
 

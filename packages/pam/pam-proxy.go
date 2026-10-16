@@ -75,7 +75,6 @@ func GetSupportedResourceTypes() []string {
 	if rdp.IsSupported() {
 		types = append(types, session.ResourceTypeWindows)
 	}
-	// Only advertise web apps when a browser is installed to serve them.
 	if webapp.IsSupported() {
 		types = append(types, session.ResourceTypeWebApp)
 	}

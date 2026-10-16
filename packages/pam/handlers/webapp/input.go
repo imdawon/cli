@@ -155,10 +155,10 @@ func (d *inputDispatcher) evaluate(ctx context.Context, expression string, resul
 	return json.Unmarshal(response.Result.Value, result)
 }
 
+const maskedValue = "[MASKED]"
+
 func (d *inputDispatcher) record(a recordedAction) {
-	if d.recorder != nil {
-		d.recorder.input(a)
-	}
+	d.recorder.input(a)
 }
 
 func (d *inputDispatcher) dispatch(ctx context.Context, payload []byte) error {
@@ -180,10 +180,10 @@ func (d *inputDispatcher) dispatch(ctx context.Context, payload []byte) error {
 			return nil
 		}
 		recorded := recordedAction{Kind: "mouse", Action: msg.Kind, X: x, Y: y, Button: msg.Button}
-		if msg.Kind == "down" && d.recorder != nil {
+		if msg.Kind == "down" {
 			_ = d.evaluate(ctx, fmt.Sprintf(describeElementScript, x, y), &recorded.Target)
 		}
-		if msg.Kind == "down" && msg.Button == "left" && d.notify != nil {
+		if msg.Kind == "down" && msg.Button == "left" {
 			opened, err := d.openSelect(ctx, x, y)
 			if err != nil {
 				return err
@@ -246,7 +246,7 @@ func (d *inputDispatcher) dispatch(ctx context.Context, payload []byte) error {
 		params["type"] = eventType
 		// Decided before dispatch: Enter or Tab can move focus out of the password field
 		recordedKey := msg.Key
-		if msg.Kind == "down" && d.recorder != nil {
+		if msg.Kind == "down" {
 			var isPassword bool
 			if err := d.evaluate(ctx, focusedIsPasswordScript, &isPassword); err != nil || isPassword {
 				recordedKey = maskedValue

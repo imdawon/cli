@@ -53,7 +53,6 @@ type cdpClient struct {
 	events chan cdpEvent
 	done   chan struct{}
 	stop   chan struct{}
-	err    error
 }
 
 func newCDPClient(r io.Reader, w io.Writer) *cdpClient {
@@ -83,7 +82,6 @@ func (c *cdpClient) readLoop(r io.Reader) {
 	for {
 		raw, err := reader.ReadBytes(0)
 		if err != nil {
-			c.err = err
 			return
 		}
 		raw = raw[:len(raw)-1]

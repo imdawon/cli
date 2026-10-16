@@ -3,7 +3,10 @@ package webapp
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -293,4 +296,19 @@ func TestDispatchRejectsUnknownInput(t *testing.T) {
 			t.Errorf("%s: expected an error", payload)
 		}
 	}
+}
+
+func decodeFrame(payload []byte) (FrameMeta, []byte, error) {
+	var meta FrameMeta
+	if len(payload) < 4 {
+		return meta, nil, errors.New("frame payload too short")
+	}
+	metaLen := binary.BigEndian.Uint32(payload[:4])
+	if uint64(metaLen) > uint64(len(payload)-4) {
+		return meta, nil, errors.New("frame metadata length exceeds payload")
+	}
+	if err := json.Unmarshal(payload[4:4+metaLen], &meta); err != nil {
+		return meta, nil, fmt.Errorf("invalid frame metadata: %w", err)
+	}
+	return meta, payload[4+metaLen:], nil
 }
