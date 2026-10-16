@@ -139,6 +139,25 @@ services:
     ports:
       - "127.0.0.1:55423:22"
 
+  web-app:
+    # A stand-in internal web app for web app sessions: navigation, a POST form, assets, and a panel showing
+    # the Authorization header it received (to check credential injection).
+    image: node:22-alpine
+    profiles: [web-app]
+    command: ["node", "/app/server.mjs"]
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3001"
+    ports:
+      - "127.0.0.1:55490:3001"
+    volumes:
+      - ./resources/web-app:/app:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/api/status"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 volumes:
   pam_pgdata:
   pam_mysqldata:

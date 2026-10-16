@@ -1,0 +1,32 @@
+:root { --bg: #0f172a; --card: #1e293b; --ink: #e2e8f0; --muted: #94a3b8; --accent: #22c55e; --line: #334155; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+header { display: flex; align-items: center; gap: 14px; padding: 16px 28px; border-bottom: 1px solid var(--line); }
+header h1 { margin: 0; font-size: 20px; }
+.sub { margin: 0; color: var(--muted); font-size: 13px; }
+.clock { margin-left: auto; font: 600 26px/1 ui-monospace, Menlo, monospace; color: var(--accent); }
+nav { display: flex; gap: 6px; padding: 10px 28px; border-bottom: 1px solid var(--line); }
+nav a { color: var(--ink); text-decoration: none; padding: 6px 14px; border-radius: 6px; }
+nav a.active { background: var(--accent); color: #052e16; font-weight: 600; }
+main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 20px 28px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.card h2 { margin: 0 0 8px; font-size: 16px; }
+a { color: #7dd3fc; }
+.checks { list-style: none; padding: 0; margin: 0 0 10px; display: flex; gap: 14px; }
+.checks li::before { content: "✗ "; color: #f87171; }
+.checks li.ok::before { content: "✓ "; color: var(--accent); }
+pre { background: #0b1220; padding: 8px; border-radius: 6px; font-size: 12px; margin: 8px 0 0; white-space: pre-wrap; }
+form { display: grid; gap: 8px; margin-bottom: 10px; }
+label { display: grid; gap: 2px; color: var(--muted); font-size: 13px; }
+input, select, button { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: #0b1220; color: var(--ink); }
+button { background: var(--accent); color: #052e16; font-weight: 600; cursor: pointer; border: none; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.empty { color: var(--muted); }
+.ok { color: var(--accent); margin: 0 0 8px; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; }
+.ua { font-size: 12px; word-break: break-all; }
+/* Proves the stylesheet loaded: app.js reads this custom property. */
+body { --css-loaded: 1; }

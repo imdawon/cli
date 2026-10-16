@@ -14,6 +14,7 @@ up:
 	[ "$$ENABLE_REDIS_NOAUTH"  = "true" ] && profiles="$$profiles,redis-noauth"   || true; \
 	[ "$$ENABLE_SSH_PASSWORD"  = "true" ] && profiles="$$profiles,ssh-password"   || true; \
 	[ "$$ENABLE_SSH_KEY"       = "true" ] && profiles="$$profiles,ssh-key"        || true; \
+	[ "$$ENABLE_WEB_APP"       = "true" ] && profiles="$$profiles,web-app"        || true; \
 	profiles="$${profiles#,}"; \
 	if [ -z "$$profiles" ]; then echo "No resources enabled in .env. Flip some ENABLE_* flags to true."; exit 1; fi; \
 	echo "Bringing up: $$profiles"; \
@@ -25,12 +26,12 @@ up:
 down:
 	@docker compose --profile postgres --profile mysql --profile mssql --profile mongodb \
 	                --profile redis --profile redis-noauth \
-	                --profile ssh-password --profile ssh-key down
+	                --profile ssh-password --profile ssh-key --profile web-app down
 
 clean:
 	@docker compose --profile postgres --profile mysql --profile mssql --profile mongodb \
 	                --profile redis --profile redis-noauth \
-	                --profile ssh-password --profile ssh-key down -v --rmi local --remove-orphans
+	                --profile ssh-password --profile ssh-key --profile web-app down -v --rmi local --remove-orphans
 	@for v in pam_pgdata pam_mysqldata pam_mssqldata pam_mongodata \
 	          pam_redisdata pam_redisnoauthdata pam_sshkeydata; do \
 	  docker volume rm "$$(basename $$PWD)_$$v" 2>/dev/null || true; \
