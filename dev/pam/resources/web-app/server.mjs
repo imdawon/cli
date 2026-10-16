@@ -18,6 +18,7 @@ const REQUIRED_HEADER_NAME = (process.env.REQUIRED_HEADER_NAME || "").toLowerCas
 const REQUIRED_HEADER_VALUE = process.env.REQUIRED_HEADER_VALUE || "";
 
 const submissions = [];
+let passwordChangedAt = null;
 let requestCount = 0;
 
 const ASSETS = {
@@ -133,6 +134,17 @@ const renderPage = (req, url) => {
       </table>
     </section>
 
+    <section class="card" id="password-form">
+      <h2>Change admin password</h2>
+      ${url.searchParams.get("password") === "changed" ? '<p class="ok">Password changed.</p>' : ""}
+      <form method="POST" action="/password">
+        <label>Current password <input type="password" name="current" required maxlength="128" autocomplete="off"></label>
+        <label>New password <input type="password" name="next" required maxlength="128" autocomplete="off"></label>
+        <button type="submit">Change password</button>
+      </form>
+      <p class="sub">Last changed: ${passwordChangedAt ? esc(passwordChangedAt) : "never"}</p>
+    </section>
+
     <section class="card">
       <h2>What this app received</h2>
       <dl>
@@ -194,6 +206,17 @@ const server = http.createServer(async (req, res) => {
         note: (form.get("note") || "").slice(0, 120)
       });
       res.writeHead(303, { Location: "/?submitted=1#orders-form" });
+      res.end();
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/password") {
+      // Values are read and dropped: the app only records that a change happened
+      const form = new URLSearchParams(await readBody(req));
+      if (form.get("current") && form.get("next")) {
+        passwordChangedAt = new Date().toLocaleTimeString("en-US", { hour12: false });
+      }
+      res.writeHead(303, { Location: "/?password=changed#password-form" });
       res.end();
       return;
     }
