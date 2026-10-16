@@ -27,6 +27,7 @@ import (
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/redis"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/snowflake"
 	"github.com/Infisical/infisical-merge/packages/pam/handlers/ssh"
+	"github.com/Infisical/infisical-merge/packages/pam/handlers/webapp"
 	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/Infisical/infisical-merge/packages/pam/session/masking"
 	"github.com/Infisical/infisical-merge/packages/util"
@@ -73,6 +74,10 @@ func GetSupportedResourceTypes() []string {
 	// session at connect time with ErrRdpUnavailable.
 	if rdp.IsSupported() {
 		types = append(types, session.ResourceTypeWindows)
+	}
+	// Only advertise web apps when a browser is installed to serve them.
+	if webapp.IsSupported() {
+		types = append(types, session.ResourceTypeWebApp)
 	}
 	return types
 }
@@ -636,6 +641,16 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		log.Info().
 			Str("sessionId", pamConfig.SessionId).
 			Msg("Starting Azure CLI PAM proxy")
+		return proxy.HandleConnection(ctx, handlerConn)
+	case session.ResourceTypeWebApp:
+		proxy := webapp.NewWebAppProxy(webapp.WebAppProxyConfig{
+			TargetURL: credentials.Url,
+			SessionID: pamConfig.SessionId,
+		})
+		log.Info().
+			Str("sessionId", pamConfig.SessionId).
+			Str("url", credentials.Url).
+			Msg("Starting web app PAM proxy")
 		return proxy.HandleConnection(ctx, handlerConn)
 	default:
 		return fmt.Errorf("unsupported resource type: %s", pamConfig.ResourceType)
