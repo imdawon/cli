@@ -134,6 +134,22 @@ const renderPage = (req, url) => {
       </table>
     </section>
 
+    <section class="card" id="egress-probes">
+      <h2>Blocked resource probes</h2>
+      <p class="sub">Requests to other sites. A PAM web app session should block and record each one.</p>
+      <img src="https://example.com/favicon.ico?probe=page-load" alt="" width="1" height="1" id="probe-onload">
+      <ul class="checks probes">
+        <li id="probe-onload-status">Image on page load</li>
+        <li id="probe-fetch">fetch()</li>
+        <li id="probe-img">Image</li>
+        <li id="probe-iframe">iframe</li>
+        <li id="probe-script">Script</li>
+        <li id="probe-ws">WebSocket (known gap: not intercepted)</li>
+      </ul>
+      <button id="probe-btn" type="button">Run probes</button>
+      <div id="probe-frames"></div>
+    </section>
+
     <section class="card" id="password-form">
       <h2>Change admin password</h2>
       ${url.searchParams.get("password") === "changed" ? '<p class="ok">Password changed.</p>' : ""}
