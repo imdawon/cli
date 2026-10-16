@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -27,13 +28,26 @@ type WebAppProxyConfig struct {
 }
 
 // WebAppProxy runs one isolated browser for a session. The gateway is its only CDP client: the viewer
-// receives rendered frames and, from M2, sends typed input messages that the gateway translates into CDP.
+// receives rendered frames and sends typed input messages that the gateway translates into CDP.
 type WebAppProxy struct {
 	config WebAppProxyConfig
 }
 
 func NewWebAppProxy(config WebAppProxyConfig) *WebAppProxy {
 	return &WebAppProxy{config: config}
+}
+
+// sameOrigin reports whether a request may leave the browser: only the account's own origin is reachable,
+// so a page can't be used to reach other internal hosts.
+func sameOrigin(target *url.URL, raw string) bool {
+	if strings.HasPrefix(raw, "data:") || strings.HasPrefix(raw, "blob:") || raw == "about:blank" {
+		return true
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme == target.Scheme && parsed.Host == target.Host
 }
 
 // isViewerClosed reports whether err only means the viewer went away, which ends a session normally.
@@ -100,13 +114,26 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, clientConn net.Conn)
 		return err
 	}
 
-	// The viewer side: M1 only watches for disconnect, and drops whatever it sends.
+	// Input is dispatched in order from this one goroutine. A malformed message is dropped, not fatal, so a
+	// buggy client can't end a session it's still using.
+	dispatcher := &inputDispatcher{cdp: b.cdp, pageSession: pageSession, width: defaultViewportWidth, height: defaultViewportHeight}
 	viewerGone := make(chan error, 1)
 	go func() {
 		for {
-			if _, err := readMessage(clientConn); err != nil {
+			msg, err := readMessage(clientConn)
+			if err != nil {
 				viewerGone <- err
 				return
+			}
+			if msg.Type != MessageTypeInput {
+				logger.Debug().Uint8("type", uint8(msg.Type)).Msg("Dropped unexpected web app viewer message")
+				continue
+			}
+			if err := dispatcher.dispatch(ctx, msg.Payload); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				logger.Debug().Err(err).Msg("Dropped web app input")
 			}
 		}
 	}()
@@ -131,6 +158,25 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, clientConn net.Conn)
 				continue
 			}
 			switch event.Method {
+			case "Fetch.requestPaused":
+				var params struct {
+					RequestID string `json:"requestId"`
+					Request   struct {
+						URL string `json:"url"`
+					} `json:"request"`
+				}
+				if err := json.Unmarshal(event.Params, &params); err != nil {
+					continue
+				}
+				if sameOrigin(target, params.Request.URL) {
+					_ = b.cdp.notify(pageSession, "Fetch.continueRequest", map[string]any{"requestId": params.RequestID})
+					continue
+				}
+				_ = b.cdp.notify(pageSession, "Fetch.failRequest", map[string]any{"requestId": params.RequestID, "errorReason": "BlockedByClient"})
+				logger.Info().Str("url", params.Request.URL).Msg("Blocked web app request to another origin")
+				if err := sendEvent(Event{Kind: EventKindBlocked, URL: params.Request.URL}); err != nil && isViewerClosed(err) {
+					return nil
+				}
 			case "Page.screencastFrame":
 				if err := p.forwardFrame(b.cdp, pageSession, event.Params, &seq, send); err != nil {
 					if isViewerClosed(err) {
@@ -189,14 +235,19 @@ func (p *WebAppProxy) openPage(ctx context.Context, cdp *cdpClient, targetURL st
 			"format": "jpeg", "quality": screencastJPEGQuality,
 			"maxWidth": defaultViewportWidth, "maxHeight": defaultViewportHeight,
 		}},
-		// Navigate last: the first navigation away from about:blank swaps the page into a new renderer, and
-		// starting the screencast during that swap fails with "Not attached to an active page".
-		{"Page.navigate", map[string]any{"url": targetURL}},
+		// Every request pauses here so the handler can refuse any origin but the account's
+		{"Fetch.enable", map[string]any{"patterns": []map[string]any{{"urlPattern": "*"}}}},
 	}
 	for _, step := range steps {
 		if err := cdp.call(ctx, session, step.method, step.params, nil); err != nil {
 			return "", err
 		}
+	}
+	// Navigate last: the first navigation away from about:blank swaps the page into a new renderer, and
+	// starting the screencast during that swap fails with "Not attached to an active page". It isn't awaited:
+	// its request pauses in Fetch until the event loop, which starts after this returns, lets it through.
+	if err := cdp.notify(session, "Page.navigate", map[string]any{"url": targetURL}); err != nil {
+		return "", err
 	}
 	return session, nil
 }

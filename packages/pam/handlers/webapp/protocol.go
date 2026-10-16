@@ -40,6 +40,7 @@ const (
 	EventKindReady     EventKind = "ready"
 	EventKindNavigated EventKind = "navigated"
 	EventKindEnded     EventKind = "ended"
+	EventKindBlocked   EventKind = "blocked"
 )
 
 type Event struct {

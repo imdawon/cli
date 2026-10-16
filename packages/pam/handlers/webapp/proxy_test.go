@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -126,5 +127,153 @@ func TestHandleConnectionStreamsFrames(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("HandleConnection did not return after viewer disconnect")
+	}
+}
+
+// viewerSession drives HandleConnection the way the dashboard viewer does: it reads messages continuously
+// and sends input, so tests can wait for the events an action should produce.
+type viewerSession struct {
+	t      *testing.T
+	conn   net.Conn
+	events chan Event
+	done   chan error
+}
+
+func startViewerSession(t *testing.T, targetURL string) *viewerSession {
+	t.Helper()
+	viewer, gateway := net.Pipe()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancel)
+
+	s := &viewerSession{t: t, conn: viewer, events: make(chan Event, 64), done: make(chan error, 1)}
+	proxy := NewWebAppProxy(WebAppProxyConfig{TargetURL: targetURL, SessionID: "test-session"})
+	go func() { s.done <- proxy.HandleConnection(ctx, gateway) }()
+	go func() {
+		for {
+			msg, err := readMessage(viewer)
+			if err != nil {
+				close(s.events)
+				return
+			}
+			if msg.Type == MessageTypeEvent {
+				var event Event
+				if json.Unmarshal(msg.Payload, &event) == nil {
+					s.events <- event
+				}
+			}
+		}
+	}()
+	t.Cleanup(func() { viewer.Close() })
+	return s
+}
+
+func (s *viewerSession) send(input map[string]any) {
+	s.t.Helper()
+	payload, err := json.Marshal(input)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	if err := writeMessage(s.conn, MessageTypeInput, payload); err != nil {
+		s.t.Fatalf("send input: %v", err)
+	}
+}
+
+func (s *viewerSession) click(x, y float64) {
+	s.send(map[string]any{"t": "mouse", "kind": "down", "x": x, "y": y, "button": "left", "clickCount": 1})
+	s.send(map[string]any{"t": "mouse", "kind": "up", "x": x, "y": y, "button": "left", "clickCount": 1})
+}
+
+func (s *viewerSession) waitFor(description string, match func(Event) bool) Event {
+	s.t.Helper()
+	timeout := time.After(15 * time.Second)
+	for {
+		select {
+		case event, ok := <-s.events:
+			if !ok {
+				s.t.Fatalf("connection closed while waiting for %s", description)
+			}
+			if match(event) {
+				return event
+			}
+		case <-timeout:
+			s.t.Fatalf("timed out waiting for %s", description)
+		}
+	}
+}
+
+func TestHandleConnectionDispatchesInput(t *testing.T) {
+	if !IsSupported() {
+		t.Skip("no browser installed")
+	}
+
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("other origin"))
+	}))
+	defer other.Close()
+
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		switch r.URL.Path {
+		case "/clicked":
+			_, _ = w.Write([]byte(`<html><body>clicked</body></html>`))
+		case "/search":
+			_, _ = w.Write([]byte(`<html><body>results for ` + r.URL.Query().Get("q") + `</body></html>`))
+		default:
+			_, _ = w.Write([]byte(`<html><body style="margin:0">
+<a href="/clicked" style="position:absolute;left:0;top:0;width:200px;height:100px;display:block">go</a>
+<form action="/search" style="position:absolute;left:0;top:200px;margin:0">
+  <input name="q" style="width:300px;height:40px;box-sizing:border-box">
+</form>
+<a href="` + other.URL + `/x" style="position:absolute;left:0;top:400px;width:200px;height:100px;display:block">ext</a>
+</body></html>`))
+		}
+	}))
+	defer app.Close()
+
+	s := startViewerSession(t, app.URL)
+	navigatedTo := func(path string) func(Event) bool {
+		return func(e Event) bool { return e.Kind == EventKindNavigated && e.URL == app.URL+path }
+	}
+
+	s.waitFor("the page to load", navigatedTo("/"))
+
+	s.click(50, 50)
+	s.waitFor("the link click to navigate", navigatedTo("/clicked"))
+
+	s.send(map[string]any{"t": "nav", "action": "back"})
+	s.waitFor("back to return to the page", navigatedTo("/"))
+
+	s.click(100, 220)
+	for _, ch := range "hi" {
+		s.send(map[string]any{"t": "key", "kind": "down", "key": string(ch), "code": "Key" + strings.ToUpper(string(ch)), "text": string(ch)})
+		s.send(map[string]any{"t": "key", "kind": "up", "key": string(ch), "code": "Key" + strings.ToUpper(string(ch))})
+	}
+	s.send(map[string]any{"t": "key", "kind": "down", "key": "Enter", "code": "Enter", "text": "\r"})
+	s.send(map[string]any{"t": "key", "kind": "up", "key": "Enter", "code": "Enter"})
+	s.waitFor("typing and Enter to submit the form", navigatedTo("/search?q=hi"))
+
+	s.send(map[string]any{"t": "nav", "action": "back"})
+	s.waitFor("back to return to the page", navigatedTo("/"))
+
+	s.click(50, 450)
+	blocked := s.waitFor("the other-origin link to be blocked", func(e Event) bool { return e.Kind == EventKindBlocked })
+	if !strings.HasPrefix(blocked.URL, other.URL) {
+		t.Fatalf("blocked %q, want a request to %s", blocked.URL, other.URL)
+	}
+}
+
+func TestDispatchRejectsUnknownInput(t *testing.T) {
+	d := &inputDispatcher{width: defaultViewportWidth, height: defaultViewportHeight}
+	for _, payload := range []string{
+		`{"t":"eval","expression":"document.cookie"}`,
+		`{"t":"mouse","kind":"teleport","x":1,"y":1,"button":"left"}`,
+		`{"t":"mouse","kind":"down","x":1,"y":1,"button":"left","clickCount":9}`,
+		`{"t":"key","kind":"down","key":"a","text":"this text is far too long"}`,
+		`{"t":"nav","action":"navigate"}`,
+		`not json`,
+	} {
+		if err := d.dispatch(context.Background(), []byte(payload)); err == nil {
+			t.Errorf("%s: expected an error", payload)
+		}
 	}
 }
