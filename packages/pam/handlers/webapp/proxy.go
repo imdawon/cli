@@ -12,7 +12,9 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
+	"github.com/Infisical/infisical-merge/packages/pam/session"
 	"github.com/rs/zerolog/log"
 )
 
@@ -23,9 +25,17 @@ const (
 )
 
 type WebAppProxyConfig struct {
-	TargetURL string
-	SessionID string
+	TargetURL     string
+	SessionID     string
+	SessionLogger session.SessionLogger
+	// Mask applies the template's session log masking to recorded text (URLs, click labels)
+	Mask func(string) string
 }
+
+const recorderFlushInterval = 250 * time.Millisecond
+
+// Bounds the requests awaiting a response, so a page that never finishes requests can't grow it forever
+const maxTrackedRequests = 1000
 
 // WebAppProxy runs one isolated browser for a session. The gateway is its only CDP client: the viewer
 // receives rendered frames and sends typed input messages that the gateway translates into CDP.
@@ -116,7 +126,10 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, clientConn net.Conn)
 
 	// Input is dispatched in order from this one goroutine. A malformed message is dropped, not fatal, so a
 	// buggy client can't end a session it's still using.
-	dispatcher := &inputDispatcher{cdp: b.cdp, pageSession: pageSession, width: defaultViewportWidth, height: defaultViewportHeight}
+	rec := newRecorder(p.config.SessionLogger, p.config.Mask)
+	dispatcher := &inputDispatcher{
+		cdp: b.cdp, pageSession: pageSession, width: defaultViewportWidth, height: defaultViewportHeight, recorder: rec,
+	}
 	viewerGone := make(chan error, 1)
 	go func() {
 		for {
@@ -138,9 +151,23 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, clientConn net.Conn)
 		}
 	}()
 
+	type pendingRequest struct{ method, url string }
+	requests := make(map[string]pendingRequest)
+	recordRequest := func(method, rawURL string, status int, errorText string) {
+		if strings.HasPrefix(rawURL, "data:") || strings.HasPrefix(rawURL, "blob:") {
+			return
+		}
+		rec.action(recordedAction{Kind: "request", Method: method, URL: rawURL, Status: status, Error: errorText})
+	}
+
+	flushTicker := time.NewTicker(recorderFlushInterval)
+	defer flushTicker.Stop()
+
 	var seq uint64
 	for {
 		select {
+		case <-flushTicker.C:
+			rec.flush()
 		case <-ctx.Done():
 			_ = sendEvent(Event{Kind: EventKindEnded, Reason: "session ended"})
 			return nil
@@ -158,6 +185,53 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, clientConn net.Conn)
 				continue
 			}
 			switch event.Method {
+			case "Network.requestWillBeSent":
+				var params struct {
+					RequestID string `json:"requestId"`
+					Request   struct {
+						Method string `json:"method"`
+						URL    string `json:"url"`
+					} `json:"request"`
+					RedirectResponse *struct {
+						Status int `json:"status"`
+					} `json:"redirectResponse"`
+				}
+				if err := json.Unmarshal(event.Params, &params); err != nil {
+					continue
+				}
+				// A redirect reuses the request id, so the hop that just finished is recorded with its status
+				if prev, ok := requests[params.RequestID]; ok && params.RedirectResponse != nil {
+					recordRequest(prev.method, prev.url, params.RedirectResponse.Status, "")
+				}
+				if len(requests) < maxTrackedRequests {
+					requests[params.RequestID] = pendingRequest{method: params.Request.Method, url: params.Request.URL}
+				}
+			case "Network.responseReceived":
+				var params struct {
+					RequestID string `json:"requestId"`
+					Response  struct {
+						Status int `json:"status"`
+					} `json:"response"`
+				}
+				if err := json.Unmarshal(event.Params, &params); err != nil {
+					continue
+				}
+				if req, ok := requests[params.RequestID]; ok {
+					recordRequest(req.method, req.url, params.Response.Status, "")
+					delete(requests, params.RequestID)
+				}
+			case "Network.loadingFailed":
+				var params struct {
+					RequestID string `json:"requestId"`
+					ErrorText string `json:"errorText"`
+				}
+				if err := json.Unmarshal(event.Params, &params); err != nil {
+					continue
+				}
+				if req, ok := requests[params.RequestID]; ok {
+					recordRequest(req.method, req.url, 0, params.ErrorText)
+					delete(requests, params.RequestID)
+				}
 			case "Fetch.requestPaused":
 				var params struct {
 					RequestID string `json:"requestId"`
@@ -174,11 +248,12 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, clientConn net.Conn)
 				}
 				_ = b.cdp.notify(pageSession, "Fetch.failRequest", map[string]any{"requestId": params.RequestID, "errorReason": "BlockedByClient"})
 				logger.Info().Str("url", params.Request.URL).Msg("Blocked web app request to another origin")
+				rec.action(recordedAction{Kind: "blocked", URL: params.Request.URL})
 				if err := sendEvent(Event{Kind: EventKindBlocked, URL: params.Request.URL}); err != nil && isViewerClosed(err) {
 					return nil
 				}
 			case "Page.screencastFrame":
-				if err := p.forwardFrame(b.cdp, pageSession, event.Params, &seq, send); err != nil {
+				if err := p.forwardFrame(b.cdp, pageSession, event.Params, &seq, send, rec); err != nil {
 					if isViewerClosed(err) {
 						logger.Info().Msg("Web app viewer disconnected")
 						return nil
@@ -193,6 +268,7 @@ func (p *WebAppProxy) HandleConnection(ctx context.Context, clientConn net.Conn)
 					} `json:"frame"`
 				}
 				if err := json.Unmarshal(event.Params, &params); err == nil && params.Frame.ParentID == "" {
+					rec.action(recordedAction{Kind: "navigate", URL: params.Frame.URL})
 					if err := sendEvent(Event{Kind: EventKindNavigated, URL: params.Frame.URL}); err != nil {
 						if isViewerClosed(err) {
 							return nil
@@ -228,6 +304,7 @@ func (p *WebAppProxy) openPage(ctx context.Context, cdp *cdpClient, targetURL st
 		params any
 	}{
 		{"Page.enable", nil},
+		{"Network.enable", nil},
 		{"Emulation.setDeviceMetricsOverride", map[string]any{
 			"width": defaultViewportWidth, "height": defaultViewportHeight, "deviceScaleFactor": 1, "mobile": false,
 		}},
@@ -252,7 +329,7 @@ func (p *WebAppProxy) openPage(ctx context.Context, cdp *cdpClient, targetURL st
 	return session, nil
 }
 
-func (p *WebAppProxy) forwardFrame(cdp *cdpClient, pageSession string, raw json.RawMessage, seq *uint64, send func(MessageType, []byte) error) error {
+func (p *WebAppProxy) forwardFrame(cdp *cdpClient, pageSession string, raw json.RawMessage, seq *uint64, send func(MessageType, []byte) error, rec *recorder) error {
 	var frame struct {
 		Data      string `json:"data"`
 		SessionID int    `json:"sessionId"`
@@ -276,6 +353,8 @@ func (p *WebAppProxy) forwardFrame(cdp *cdpClient, pageSession string, raw json.
 	if err != nil {
 		return fmt.Errorf("invalid screencast frame data: %w", err)
 	}
+
+	rec.frame(jpeg)
 
 	*seq++
 	payload, err := encodeFrame(FrameMeta{

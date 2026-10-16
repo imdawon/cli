@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -104,6 +105,51 @@ type inputDispatcher struct {
 	pageSession string
 	width       int
 	height      int
+	recorder    *recorder
+}
+
+// Labels what sits under a click for the recording. It never reads a field's value, only a button's caption,
+// so a password can't reach the recording through this path.
+const describeElementScript = `(() => {
+  const at = document.elementFromPoint(%f, %f);
+  if (!at) return "";
+  const el = at.closest("a,button,input,select,textarea,label,summary,[role]") || at;
+  const tag = el.tagName.toLowerCase();
+  const type = (el.getAttribute("type") || "").toLowerCase();
+  let name = el.getAttribute("aria-label") || "";
+  if (!name) {
+    if (tag === "input") name = type === "submit" || type === "button" ? el.value : el.placeholder || el.name || "";
+    else if (tag === "textarea" || tag === "select") name = el.name || "";
+    else name = el.innerText || "";
+  }
+  name = name.replace(/\s+/g, " ").trim().slice(0, 80);
+  const kind = tag === "a" ? "link" : tag === "input" ? (type || "text") + " field" : tag;
+  return name ? kind + ' "' + name + '"' : kind;
+})()`
+
+const focusedIsPasswordScript = `(() => { const el = document.activeElement; return !!el && el.type === "password"; })()`
+
+func (d *inputDispatcher) evaluate(ctx context.Context, expression string, result any) error {
+	var response struct {
+		Result struct {
+			Value json.RawMessage `json:"value"`
+		} `json:"result"`
+	}
+	if err := d.cdp.call(ctx, d.pageSession, "Runtime.evaluate", map[string]any{
+		"expression": expression, "returnByValue": true,
+	}, &response); err != nil {
+		return err
+	}
+	if len(response.Result.Value) == 0 {
+		return nil
+	}
+	return json.Unmarshal(response.Result.Value, result)
+}
+
+func (d *inputDispatcher) record(a recordedAction) {
+	if d.recorder != nil {
+		d.recorder.input(a)
+	}
 }
 
 func (d *inputDispatcher) dispatch(ctx context.Context, payload []byte) error {
@@ -119,23 +165,37 @@ func (d *inputDispatcher) dispatch(ctx context.Context, payload []byte) error {
 			msg.Modifiers < 0 || msg.Modifiers > maxModifiers {
 			return errors.New("invalid mouse input")
 		}
-		return d.cdp.call(ctx, d.pageSession, "Input.dispatchMouseEvent", map[string]any{
+		x, y := clamp(msg.X, 0, float64(d.width-1)), clamp(msg.Y, 0, float64(d.height-1))
+		recorded := recordedAction{Kind: "mouse", Action: msg.Kind, X: x, Y: y, Button: msg.Button}
+		if msg.Kind == "down" && d.recorder != nil {
+			_ = d.evaluate(ctx, fmt.Sprintf(describeElementScript, x, y), &recorded.Target)
+		}
+		if err := d.cdp.call(ctx, d.pageSession, "Input.dispatchMouseEvent", map[string]any{
 			"type":       eventType,
-			"x":          clamp(msg.X, 0, float64(d.width-1)),
-			"y":          clamp(msg.Y, 0, float64(d.height-1)),
+			"x":          x,
+			"y":          y,
 			"button":     msg.Button,
 			"clickCount": msg.ClickCount,
 			"modifiers":  msg.Modifiers,
-		}, nil)
+		}, nil); err != nil {
+			return err
+		}
+		d.record(recorded)
+		return nil
 
 	case "wheel":
-		return d.cdp.call(ctx, d.pageSession, "Input.dispatchMouseEvent", map[string]any{
+		x, y := clamp(msg.X, 0, float64(d.width-1)), clamp(msg.Y, 0, float64(d.height-1))
+		if err := d.cdp.call(ctx, d.pageSession, "Input.dispatchMouseEvent", map[string]any{
 			"type":   "mouseWheel",
-			"x":      clamp(msg.X, 0, float64(d.width-1)),
-			"y":      clamp(msg.Y, 0, float64(d.height-1)),
+			"x":      x,
+			"y":      y,
 			"deltaX": clamp(msg.DX, -maxWheelDelta, maxWheelDelta),
 			"deltaY": clamp(msg.DY, -maxWheelDelta, maxWheelDelta),
-		}, nil)
+		}, nil); err != nil {
+			return err
+		}
+		d.record(recordedAction{Kind: "mouse", Action: "wheel", X: x, Y: y})
+		return nil
 
 	case "key":
 		if (msg.Kind != "down" && msg.Kind != "up") || len(msg.Key) > maxKeyFieldLength ||
@@ -160,7 +220,21 @@ func (d *inputDispatcher) dispatch(ctx context.Context, payload []byte) error {
 			}
 		}
 		params["type"] = eventType
-		return d.cdp.call(ctx, d.pageSession, "Input.dispatchKeyEvent", params, nil)
+		// Decided before dispatch: Enter or Tab can move focus out of the password field
+		recordedKey := msg.Key
+		if msg.Kind == "down" && d.recorder != nil {
+			var isPassword bool
+			if err := d.evaluate(ctx, focusedIsPasswordScript, &isPassword); err != nil || isPassword {
+				recordedKey = maskedValue
+			}
+		}
+		if err := d.cdp.call(ctx, d.pageSession, "Input.dispatchKeyEvent", params, nil); err != nil {
+			return err
+		}
+		if msg.Kind == "down" {
+			d.record(recordedAction{Kind: "key", Key: recordedKey})
+		}
+		return nil
 
 	case "resize":
 		width := int(clamp(float64(msg.W), minViewportWidth, maxViewportWidth))
@@ -175,17 +249,24 @@ func (d *inputDispatcher) dispatch(ctx context.Context, payload []byte) error {
 		}
 		d.width, d.height = width, height
 		// The screencast keeps its original size cap until restarted
-		if err := d.cdp.call(ctx, d.pageSession, "Page.stopScreencast", nil, nil); err != nil {
+		if err := d.callPage(ctx, "Page.stopScreencast", nil, nil); err != nil {
 			return err
 		}
-		return d.cdp.call(ctx, d.pageSession, "Page.startScreencast", map[string]any{
+		if err := d.callPage(ctx, "Page.startScreencast", map[string]any{
 			"format": "jpeg", "quality": screencastJPEGQuality, "maxWidth": width, "maxHeight": height,
-		}, nil)
+		}, nil); err != nil {
+			return err
+		}
+		d.record(recordedAction{Kind: "resize", Width: width, Height: height})
+		return nil
 
 	case "nav":
+		if msg.Action == "reload" || msg.Action == "back" || msg.Action == "forward" {
+			d.record(recordedAction{Kind: "nav", Action: msg.Action})
+		}
 		switch msg.Action {
 		case "reload":
-			return d.cdp.call(ctx, d.pageSession, "Page.reload", nil, nil)
+			return d.callPage(ctx, "Page.reload", nil, nil)
 		case "back", "forward":
 			return d.goHistory(ctx, msg.Action)
 		default:
@@ -197,6 +278,28 @@ func (d *inputDispatcher) dispatch(ctx context.Context, payload []byte) error {
 	}
 }
 
+const (
+	pageSwapRetries    = 20
+	pageSwapRetryDelay = 50 * time.Millisecond
+)
+
+// callPage sends a Page-level command, retrying while Chrome moves the page into a new renderer. During that
+// swap, which follows most navigations, Chrome refuses Page commands with "Not attached to an active page",
+// so a Back pressed right after a form submit would otherwise be lost.
+func (d *inputDispatcher) callPage(ctx context.Context, method string, params any, result any) error {
+	for attempt := 0; ; attempt++ {
+		err := d.cdp.call(ctx, d.pageSession, method, params, result)
+		if err == nil || attempt >= pageSwapRetries || !strings.Contains(err.Error(), "Not attached to an active page") {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pageSwapRetryDelay):
+		}
+	}
+}
+
 func (d *inputDispatcher) goHistory(ctx context.Context, direction string) error {
 	var history struct {
 		CurrentIndex int `json:"currentIndex"`
@@ -204,7 +307,7 @@ func (d *inputDispatcher) goHistory(ctx context.Context, direction string) error
 			ID int `json:"id"`
 		} `json:"entries"`
 	}
-	if err := d.cdp.call(ctx, d.pageSession, "Page.getNavigationHistory", nil, &history); err != nil {
+	if err := d.callPage(ctx, "Page.getNavigationHistory", nil, &history); err != nil {
 		return err
 	}
 	index := history.CurrentIndex - 1
@@ -214,5 +317,5 @@ func (d *inputDispatcher) goHistory(ctx context.Context, direction string) error
 	if index < 0 || index >= len(history.Entries) {
 		return nil
 	}
-	return d.cdp.call(ctx, d.pageSession, "Page.navigateToHistoryEntry", map[string]any{"entryId": history.Entries[index].ID}, nil)
+	return d.callPage(ctx, "Page.navigateToHistoryEntry", map[string]any{"entryId": history.Entries[index].ID}, nil)
 }

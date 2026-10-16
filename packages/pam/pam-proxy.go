@@ -644,8 +644,10 @@ func HandlePAMProxy(ctx context.Context, conn *tls.Conn, pamConfig *GatewayPAMCo
 		return proxy.HandleConnection(ctx, handlerConn)
 	case session.ResourceTypeWebApp:
 		proxy := webapp.NewWebAppProxy(webapp.WebAppProxyConfig{
-			TargetURL: credentials.Url,
-			SessionID: pamConfig.SessionId,
+			TargetURL:     credentials.Url,
+			SessionID:     pamConfig.SessionId,
+			SessionLogger: sessionLogger,
+			Mask:          masker.MaskString,
 		})
 		log.Info().
 			Str("sessionId", pamConfig.SessionId).

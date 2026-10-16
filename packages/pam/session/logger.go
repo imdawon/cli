@@ -33,6 +33,10 @@ const (
 	SessionEventInput  SessionEventType = "input"  // Data from user to server
 	SessionEventOutput SessionEventType = "output" // Data from server to user
 	SessionEventRDP    SessionEventType = "rdp"    // RDP tap event (see SessionChannelRDP)
+
+	// Web app sessions (see SessionChannelWebApp)
+	SessionEventWebAppFrame  SessionEventType = "frame"  // Data is a JPEG of the page as the viewer saw it
+	SessionEventWebAppAction SessionEventType = "action" // Data is a JSON envelope: a click, key, navigation, request, or block
 )
 
 // SessionChannelType represents the type of SSH channel
@@ -43,6 +47,8 @@ const (
 	SessionChannelExec  SessionChannelType = "exec"     // Single command execution
 	SessionChannelSFTP  SessionChannelType = "sftp"     // SFTP file transfer
 	SessionChannelRDP   SessionChannelType = "rdp"      // RDP frame/input tap; Data carries an RDP-specific JSON envelope
+	// Web app frames and actions; the handler masks the text fields itself, since Data is JPEG or JSON
+	SessionChannelWebApp SessionChannelType = "web-app"
 )
 
 // SessionEvent represents a single event in a recorded session (SSH or RDP).
@@ -304,7 +310,7 @@ func (sl *EncryptedSessionLogger) LogSessionEvent(event SessionEvent) error {
 		// Masking patterns are SSH-shaped regexes; running them over the
 		// envelope would corrupt valid recordings whenever a pattern
 		// happened to match a substring of the JSON or base64.
-		if event.ChannelType != SessionChannelRDP {
+		if event.ChannelType != SessionChannelRDP && event.ChannelType != SessionChannelWebApp {
 			event.Data = sl.applyMasking(event.Data)
 		}
 		return json.Marshal(event)

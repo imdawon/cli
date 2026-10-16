@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Infisical/infisical-merge/packages/pam/session"
 )
 
 func TestFrameRoundTrip(t *testing.T) {
@@ -141,12 +143,17 @@ type viewerSession struct {
 
 func startViewerSession(t *testing.T, targetURL string) *viewerSession {
 	t.Helper()
+	return startViewerSessionWithLogger(t, targetURL, nil, nil)
+}
+
+func startViewerSessionWithLogger(t *testing.T, targetURL string, logger session.SessionLogger, mask func(string) string) *viewerSession {
+	t.Helper()
 	viewer, gateway := net.Pipe()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
 
 	s := &viewerSession{t: t, conn: viewer, events: make(chan Event, 64), done: make(chan error, 1)}
-	proxy := NewWebAppProxy(WebAppProxyConfig{TargetURL: targetURL, SessionID: "test-session"})
+	proxy := NewWebAppProxy(WebAppProxyConfig{TargetURL: targetURL, SessionID: "test-session", SessionLogger: logger, Mask: mask})
 	go func() { s.done <- proxy.HandleConnection(ctx, gateway) }()
 	go func() {
 		for {

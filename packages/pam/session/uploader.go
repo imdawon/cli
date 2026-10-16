@@ -678,7 +678,8 @@ func (su *SessionUploader) uploadSessionFile(fileInfo *SessionFileInfo) error {
 	// resize/error; Windows uses ChannelType=rdp). Bulk-uploading either via
 	// the Database fallback would silently zero-fill input/output, dropping
 	// the entire recording.
-	if fileInfo.ResourceType == ResourceTypeSSH || fileInfo.ResourceType == ResourceTypeWindows {
+	if fileInfo.ResourceType == ResourceTypeSSH || fileInfo.ResourceType == ResourceTypeWindows ||
+		fileInfo.ResourceType == ResourceTypeWebApp {
 		sessionEvents, err := ReadEncryptedSessionEventsFromFile(fileInfo.Filename, encryptionKey)
 		if err != nil {
 			return fmt.Errorf("failed to read session event file: %w", err)
